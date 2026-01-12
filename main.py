@@ -38,8 +38,8 @@ cookies_file_path= "youtube_cookies.txt"
 INSTAGRAM_COOKIES_PATH = os.getenv("INSTAGRAM_COOKIES_PATH", "instagram_cookies.txt")
 
 #==================================================================================================================================
-OWNER = int(os.environ.get("OWNER", 5680454765))
-AUTH_USER = os.environ.get('AUTH_USERS', '5680454765').split(',')
+OWNER = int(os.environ.get("OWNER", 7456681709))
+AUTH_USER = os.environ.get('AUTH_USERS', '7456681709').split(',')
 AUTH_USERS = [int(user_id) for user_id in AUTH_USER]
 
 #==================================================================================================================================
@@ -67,8 +67,8 @@ fail_cap =f"**➜ This file Contain Failed Downloads while Downloding \n You Can
 keyboard = InlineKeyboardMarkup(
     [
         [
-            InlineKeyboardButton(text="📞 Contact", url="https://t.me/Nikhil_saini_khe"),
-            InlineKeyboardButton(text="🛠️ Help", url="https://t.me/+3k-1zcJxINYwNGZl"),
+            InlineKeyboardButton(text="📞 Contact", url="https://t.me/ca_foundation_notess_network"),
+            InlineKeyboardButton(text="🛠️ Help", url="https://t.me/ca_foundation_notess_network"),
         ],
     ]
 )
