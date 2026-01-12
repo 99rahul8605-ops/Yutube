@@ -1,10 +1,10 @@
 services:
   - type: web
-    name: SAINI TXT DIRECT 
+    name: saini-txt-direct
     plan: free
     env: docker
     dockerfilePath: Dockerfile
-    repo: https://github.com/nikhilsaini098/Saini-txt-direct
+    repo: https://github.com/nikhilsainiop/Saini-txt-direct
     branch: main
     autoDeploy: false
     envVars:
@@ -14,7 +14,11 @@ services:
         sync: false
       - key: API_HASH
         sync: false
-      - key: WEBHOOK
+      - key: OWNER
         sync: false
+      - key: CREDIT
+        sync: false
+      #- key: WEBHOOK
+        #sync: false
       - key: PORT
         value: 8000  # Default port value, update if needed
