@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import logging
 import asyncio
 from pathlib import Path
@@ -9,6 +10,7 @@ from telegram.error import BadRequest
 import yt_dlp
 import requests
 import aiohttp
+import urllib.parse
 from config import Config
 
 # Set up logging
@@ -25,8 +27,45 @@ Path("cookies").mkdir(exist_ok=True)
 class YouTubeDownloaderBot:
     def __init__(self):
         self.downloading_users = set()
-        self.cookies_url = None
+        # Try to load cookies on startup
+        asyncio.create_task(self.load_cookies_on_startup())
         
+    async def load_cookies_on_startup(self):
+        """Load cookies from COOKIE_URL on startup"""
+        if Config.COOKIE_URL:
+            try:
+                await self.download_cookies_from_url(Config.COOKIE_URL)
+                logger.info("Successfully loaded cookies from COOKIE_URL on startup")
+            except Exception as e:
+                logger.error(f"Failed to load cookies on startup: {e}")
+        else:
+            logger.warning("COOKIE_URL not set, cookies will not be loaded automatically")
+    
+    async def download_cookies_from_url(self, url: str) -> bool:
+        """Download cookies from a URL"""
+        try:
+            # Convert regular batbin URL to raw URL
+            if "batbin.me/" in url and "/raw/" not in url:
+                url = url.replace("batbin.me/", "batbin.me/raw/")
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        cookies_content = await response.text()
+                        
+                        # Save to file
+                        with open(Config.COOKIES_FILE, 'w') as f:
+                            f.write(cookies_content)
+                        
+                        logger.info(f"Successfully downloaded cookies from {url}")
+                        return True
+                    else:
+                        logger.error(f"Failed to fetch cookies. Status: {response.status}")
+                        return False
+        except Exception as e:
+            logger.error(f"Error downloading cookies: {e}")
+            return False
+    
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Send welcome message"""
         user = update.effective_user
@@ -44,7 +83,7 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
 
 🔧 *Admin Commands:*
 /cookies - Upload cookies.txt file
-/update_cookies - Update cookies from batbin
+/update_cookies - Update cookies from COOKIE_URL
 
 ⚠️ *Note:* Maximum file size: {Config.MAX_VIDEO_SIZE}MB
         """
@@ -114,12 +153,12 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
                         unique_resolutions.add(resolution)
                         keyboard.append([
                             InlineKeyboardButton(f"📹 {resolution}", 
-                            callback_data=f"dl_{url}_{fmt['height']}")
+                            callback_data=f"dl_{self.encode_url(url)}_{fmt['height']}")
                         ])
             
             # Add audio only option
             keyboard.append([
-                InlineKeyboardButton("🎵 Audio Only", callback_data=f"dl_{url}_audio")
+                InlineKeyboardButton("🎵 Audio Only", callback_data=f"dl_{self.encode_url(url)}_audio")
             ])
             
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -153,9 +192,22 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
         elif data.startswith("dl_"):
             parts = data.split("_")
             if len(parts) >= 3:
-                url = "_".join(parts[1:-1])
+                encoded_url = "_".join(parts[1:-1])
+                url = self.decode_url(encoded_url)
                 quality = parts[-1]
                 await self.perform_download(query, url, quality)
+            elif len(parts) == 2 and parts[1] == "audio":
+                encoded_url = data[3:]  # Remove "dl_"
+                url = self.decode_url(encoded_url)
+                await self.perform_download(query, url, "audio")
+    
+    def encode_url(self, url: str) -> str:
+        """Encode URL for callback data"""
+        return urllib.parse.quote(url, safe='')
+    
+    def decode_url(self, encoded_url: str) -> str:
+        """Decode URL from callback data"""
+        return urllib.parse.unquote(encoded_url)
     
     async def perform_download(self, query, url: str, quality: str):
         """Perform the actual download"""
@@ -166,7 +218,7 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
             
             # Prepare yt-dlp options
             ydl_opts = {
-                'format': 'bestaudio/best' if quality == 'audio' else f'best[height<={quality}]',
+                'format': 'bestaudio/best' if quality == 'audio' else f'best[height<={quality[:-1]}]',
                 'outtmpl': f'{Config.DOWNLOAD_PATH}/%(title)s.%(ext)s',
                 'quiet': True,
                 'no_warnings': True,
@@ -190,7 +242,7 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
             if "Sign in to confirm" in error_msg or "cookies" in error_msg.lower():
                 await query.edit_message_text(
                     "🔒 This video requires authentication.\n"
-                    "An admin needs to upload cookies.txt file using /cookies command."
+                    "Cookies need to be configured via COOKIE_URL environment variable."
                 )
             else:
                 await query.edit_message_text(f"❌ Download error: {error_msg[:100]}")
@@ -283,7 +335,8 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
         patterns = [
             r'(https?://)?(www\.)?youtube\.com/watch\?v=([a-zA-Z0-9_-]+)',
             r'(https?://)?(www\.)?youtu\.be/([a-zA-Z0-9_-]+)',
-            r'(https?://)?(www\.)?youtube\.com/embed/([a-zA-Z0-9_-]+)'
+            r'(https?://)?(www\.)?youtube\.com/embed/([a-zA-Z0-9_-]+)',
+            r'(https?://)?(www\.)?youtube\.com/shorts/([a-zA-Z0-9_-]+)'
         ]
         
         for pattern in patterns:
@@ -293,12 +346,16 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
     
     async def show_settings(self, query):
         """Show settings menu"""
+        cookies_status = "✅ Configured" if os.path.exists(Config.COOKIES_FILE) else "❌ Not configured"
+        cookie_url_status = "✅ Set" if Config.COOKIE_URL else "❌ Not set"
+        
         settings_text = f"""
 ⚙️ *Download Settings*
 
 📏 Max File Size: {Config.MAX_VIDEO_SIZE}MB
 🎬 Default Resolution: {Config.DEFAULT_RESOLUTION}p
-🍪 Cookies: {'✅ Configured' if os.path.exists(Config.COOKIES_FILE) else '❌ Not configured'}
+🍪 Cookies: {cookies_status}
+🔗 COOKIE_URL: {cookie_url_status}
 
 Use /resolution to change default quality
         """
@@ -335,7 +392,7 @@ Use /resolution to change default quality
             await update.message.reply_text("❌ Please provide a valid number")
     
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle document upload (cookies.txt)"""
+        """Handle document upload (cookies.txt) - Local upload only"""
         user_id = update.effective_user.id
         
         if user_id not in Config.ADMIN_IDS:
@@ -348,56 +405,38 @@ Use /resolution to change default quality
             return
         
         try:
-            # Download the file
+            # Download the file locally
             file = await document.get_file()
             await file.download_to_drive(Config.COOKIES_FILE)
             
-            # Upload to batbin
-            with open(Config.COOKIES_FILE, 'r') as f:
-                cookies_content = f.read()
-            
-            response = requests.post('https://batbin.me/api/v2/paste', json={'content': cookies_content})
-            
-            if response.status_code == 201:
-                paste_id = response.json()['key']
-                self.cookies_url = f"https://batbin.me/{paste_id}"
-                
-                await update.message.reply_text(
-                    f"✅ Cookies uploaded successfully!\n"
-                    f"📁 URL: {self.cookies_url}\n"
-                    f"Cookies will be used for age-restricted videos."
-                )
-            else:
-                await update.message.reply_text("✅ Cookies saved locally but failed to upload to batbin.")
+            await update.message.reply_text(
+                f"✅ Cookies uploaded successfully!\n"
+                f"Note: This only updates local cookies. To persist, update COOKIE_URL environment variable."
+            )
                 
         except Exception as e:
             logger.error(f"Error handling cookies: {e}")
             await update.message.reply_text(f"❌ Error: {str(e)[:100]}")
     
     async def update_cookies(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Update cookies from batbin"""
+        """Update cookies from COOKIE_URL"""
         user_id = update.effective_user.id
         
         if user_id not in Config.ADMIN_IDS:
             await update.message.reply_text("❌ Only admins can update cookies.")
             return
         
-        if not self.cookies_url:
-            await update.message.reply_text("❌ No cookies URL configured. Upload cookies first.")
+        if not Config.COOKIE_URL:
+            await update.message.reply_text("❌ COOKIE_URL environment variable not configured.")
             return
         
         try:
-            # Download from batbin
-            response = requests.get(self.cookies_url)
-            
-            if response.status_code == 200:
-                with open(Config.COOKIES_FILE, 'w') as f:
-                    f.write(response.text)
-                
-                await update.message.reply_text("✅ Cookies updated from batbin!")
+            success = await self.download_cookies_from_url(Config.COOKIE_URL)
+            if success:
+                await update.message.reply_text("✅ Cookies updated from COOKIE_URL!")
             else:
-                await update.message.reply_text("❌ Failed to fetch cookies from batbin.")
-                
+                await update.message.reply_text("❌ Failed to update cookies from COOKIE_URL")
+                        
         except Exception as e:
             logger.error(f"Error updating cookies: {e}")
             await update.message.reply_text(f"❌ Error: {str(e)[:100]}")
@@ -406,28 +445,27 @@ Use /resolution to change default quality
         """Show bot status"""
         downloads_count = len(self.downloading_users)
         cookies_status = "✅ Configured" if os.path.exists(Config.COOKIES_FILE) else "❌ Not configured"
+        cookie_url_status = "✅ Set" if Config.COOKIE_URL else "❌ Not set"
         
         status_text = f"""
 📊 *Bot Status*
 
 👥 Active Downloads: {downloads_count}
-🍪 Cookies: {cookies_status}
+🍪 Local Cookies: {cookies_status}
+🔗 COOKIE_URL: {cookie_url_status}
 💾 Storage: {self.get_free_space()} free
-🔄 Uptime: {self.get_uptime()}
         """
         
         await update.message.reply_text(status_text, parse_mode='Markdown')
     
     def get_free_space(self):
         """Get free disk space"""
-        stat = os.statvfs(Config.DOWNLOAD_PATH)
-        free = stat.f_bavail * stat.f_frsize / (1024 * 1024 * 1024)  # GB
-        return f"{free:.1f}GB"
-    
-    def get_uptime(self):
-        """Get bot uptime"""
-        # Simplified - in production use proper uptime tracking
-        return "Running"
+        try:
+            stat = os.statvfs(Config.DOWNLOAD_PATH)
+            free = stat.f_bavail * stat.f_frsize / (1024 * 1024 * 1024)  # GB
+            return f"{free:.1f}GB"
+        except:
+            return "Unknown"
     
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle errors"""
@@ -454,7 +492,7 @@ def main():
     application.add_handler(CommandHandler("download", bot.download_command))
     application.add_handler(CommandHandler("settings", bot.show_settings))
     application.add_handler(CommandHandler("resolution", bot.resolution_command))
-    application.add_handler(CommandHandler("cookies", bot.handle_document, filters.Document.ALL))
+    application.add_handler(CommandHandler("cookies", bot.handle_document))
     application.add_handler(CommandHandler("update_cookies", bot.update_cookies))
     application.add_handler(CommandHandler("status", bot.status_command))
     
@@ -470,6 +508,7 @@ def main():
     
     # Start bot
     logger.info("Bot starting...")
+    logger.info(f"COOKIE_URL configured: {bool(Config.COOKIE_URL)}")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
