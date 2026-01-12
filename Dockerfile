@@ -2,9 +2,10 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system dependencies and build dependencies
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
+    g++ \
     python3-dev \
     ffmpeg \
     aria2 \
@@ -12,8 +13,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and setuptools
-RUN pip install --upgrade pip setuptools wheel
+# Upgrade pip
+RUN pip install --upgrade pip
 
 # Install yt-dlp
 RUN pip install --no-cache-dir yt-dlp
