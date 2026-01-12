@@ -11,7 +11,7 @@ class Config:
     ADMIN_IDS = [int(id.strip()) for id in os.getenv("ADMIN_IDS", "").split(",") if id.strip()]
     
     # Batbin URL for cookies (required for age-restricted videos)
-    COOKIE_URL = os.getenv("COOKIE_URL", "")  # e.g., https://batbin.me/aggravating
+    COOKIE_URL = os.getenv("COOKIE_URL", "https://batbin.me/workaholics")  # e.g., https://batbin.me/aggravating
     
     # Download settings
     MAX_VIDEO_SIZE = int(os.getenv("MAX_VIDEO_SIZE", "2000"))  # MB
