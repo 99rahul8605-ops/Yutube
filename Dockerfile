@@ -1,32 +1,37 @@
-FROM python:3.10-slim
+# Use a Python 3.9.6 Alpine base image
+FROM python:3.9.6-alpine3.14
 
+# Set the working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    python3-dev \
-    ffmpeg \
-    aria2 \
-    wget \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Upgrade pip
-RUN pip install --upgrade pip
-
-# Install yt-dlp
-RUN pip install --no-cache-dir yt-dlp
-
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application
+# Copy all files from the current directory to the container's /app directory
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p downloads cookies
+# Install necessary dependencies
+RUN apk add --no-cache \
+    gcc \
+    libffi-dev \
+    musl-dev \
+    ffmpeg \
+    aria2 \
+    make \
+    g++ \
+    cmake && \
+    wget -q https://github.com/axiomatic-systems/Bento4/archive/v1.6.0-639.zip && \
+    unzip v1.6.0-639.zip && \
+    cd Bento4-1.6.0-639 && \
+    mkdir build && \
+    cd build && \
+    cmake .. && \
+    make -j$(nproc) && \
+    cp mp4decrypt /usr/local/bin/ &&\
+    cd ../.. && \
+    rm -rf Bento4-1.6.0-639 v1.6.0-639.zip
 
-CMD ["python", "main.py"]
+# Install Python dependencies
+RUN pip3 install --no-cache-dir --upgrade pip \
+    && pip3 install --no-cache-dir --upgrade -r requirements.txt \
+    && python3 -m pip install -U yt-dlp
+
+# Set the command to run the application
+CMD ["sh", "-c", "gunicorn app:app & python3 main.py"]
