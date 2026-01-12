@@ -12,6 +12,7 @@ import requests
 import aiohttp
 import urllib.parse
 from config import Config
+import shutil
 
 # Set up logging
 logging.basicConfig(
@@ -51,20 +52,27 @@ class YouTubeDownloaderBot:
         """Download cookies from a URL"""
         try:
             # Convert regular batbin URL to raw URL
-            if "batbin.me/" in url and "/raw/" not in url:
-                url = url.replace("batbin.me/", "batbin.me/raw/")
+            if "batbin.me/" in url:
+                # Handle both formats
+                if "/raw/" not in url:
+                    url = url.replace("batbin.me/", "batbin.me/raw/")
             
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as response:
                     if response.status == 200:
                         cookies_content = await response.text()
                         
-                        # Save to file
-                        with open(Config.COOKIES_FILE, 'w') as f:
-                            f.write(cookies_content)
-                        
-                        logger.info(f"Successfully downloaded cookies from {url}")
-                        return True
+                        # Validate cookies format
+                        if "youtube.com" in cookies_content.lower() or "# http" in cookies_content.lower():
+                            # Save to file
+                            with open(Config.COOKIES_FILE, 'w', encoding='utf-8') as f:
+                                f.write(cookies_content)
+                            
+                            logger.info(f"Successfully downloaded cookies from {url}")
+                            return True
+                        else:
+                            logger.error("Cookies file doesn't appear to be in correct format")
+                            return False
                     else:
                         logger.error(f"Failed to fetch cookies. Status: {response.status}")
                         return False
@@ -76,22 +84,22 @@ class YouTubeDownloaderBot:
         """Send welcome message"""
         user = update.effective_user
         welcome_text = f"""
-🤖 *YouTube Video Downloader Bot* 🤖
+🤖 YouTube Video Downloader Bot 🤖
 
-Hello {user.first_name}! I can download videos from YouTube and other platforms.
+Hello {self.safe_text(user.first_name)}! I can download videos from YouTube and other platforms.
 
-📌 *Available Commands:*
+📌 Available Commands:
 /start - Show this message
 /download [url] - Download video
 /settings - Configure download settings
 /resolution [360|480|720|1080] - Set video quality
 /status - Check bot status
 
-🔧 *Admin Commands:*
+🔧 Admin Commands:
 /cookies - Upload cookies.txt file
 /update_cookies - Update cookies from COOKIE_URL
 
-⚠️ *Note:* Maximum file size: {Config.MAX_VIDEO_SIZE}MB
+⚠️ Note: Maximum file size: {Config.MAX_VIDEO_SIZE}MB
         """
         
         keyboard = [
@@ -102,7 +110,17 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        update.message.reply_text(welcome_text, parse_mode='Markdown', reply_markup=reply_markup)
+        update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    
+    def safe_text(self, text: str) -> str:
+        """Make text safe for Markdown parsing"""
+        if not text:
+            return ""
+        # Escape special Markdown characters
+        escape_chars = r'\_*[]()~`>#+-=|{}.!'
+        for char in escape_chars:
+            text = text.replace(char, f'\\{char}')
+        return text
     
     def handle_message(self, update: Update, context: CallbackContext):
         """Handle direct YouTube URLs"""
@@ -139,7 +157,7 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
             # Get video info
             video_info = self.get_video_info(url)
             if not video_info:
-                message.edit_text("❌ Failed to fetch video information.")
+                message.edit_text("❌ Failed to fetch video information. This video might require authentication.")
                 return
             
             # Check video size
@@ -171,8 +189,7 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
             
             title = video_info.get('title', 'Unknown Video')[:50]
             message.edit_text(
-                f"📹 *{title}*\n\nSelect download quality:",
-                parse_mode='Markdown',
+                f"📹 {title}\n\nSelect download quality:",
                 reply_markup=reply_markup
             )
             
@@ -222,19 +239,40 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
         try:
             query.edit_message_text("⏬ Downloading video...")
             
-            # Prepare yt-dlp options
+            # Check if cookies exist
+            cookies_file = Config.COOKIES_FILE if os.path.exists(Config.COOKIES_FILE) else None
+            if cookies_file:
+                logger.info(f"Using cookies file: {cookies_file}")
+            else:
+                logger.warning("No cookies file found")
+            
+            # Prepare yt-dlp options with proper cookie handling
             ydl_opts = {
                 'format': 'bestaudio/best' if quality == 'audio' else f'best[height<={quality[:-1]}]',
                 'outtmpl': f'{Config.DOWNLOAD_PATH}/%(title)s.%(ext)s',
                 'quiet': True,
                 'no_warnings': True,
                 'extract_flat': False,
-                'cookiefile': Config.COOKIES_FILE if os.path.exists(Config.COOKIES_FILE) else None,
+                'cookiefile': cookies_file,
+                'cookiesfrombrowser': ('chrome',) if not cookies_file else None,  # Fallback to browser cookies
+                'ignoreerrors': True,
+                'no_check_certificate': True,
+                'prefer_insecure': False,
+                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['android', 'web'],
+                        'skip': ['dash', 'hls'],
+                    }
+                }
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 # Get info first
                 info = ydl.extract_info(url, download=False)
+                if not info:
+                    raise Exception("Could not extract video info")
+                
                 filename = ydl.prepare_filename(info)
                 
                 # Download
@@ -245,10 +283,13 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
             
         except yt_dlp.utils.DownloadError as e:
             error_msg = str(e)
-            if "Sign in to confirm" in error_msg or "cookies" in error_msg.lower():
+            if "Sign in to confirm" in error_msg or "cookies" in error_msg.lower() or "authentication" in error_msg.lower():
                 query.edit_message_text(
-                    "🔒 This video requires authentication.\n"
-                    "Cookies need to be configured via COOKIE_URL environment variable."
+                    "🔒 This video requires authentication.\n\n"
+                    "Possible solutions:\n"
+                    "1. Update cookies using /update_cookies command\n"
+                    "2. Make sure COOKIE_URL is set correctly\n"
+                    "3. Try a different video that doesn't require login"
                 )
             else:
                 query.edit_message_text(f"❌ Download error: {error_msg[:100]}")
@@ -259,6 +300,16 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
     def send_video(self, query, filepath: str, quality: str):
         """Send downloaded video to user"""
         try:
+            if not os.path.exists(filepath):
+                # Try to find the actual downloaded file
+                download_dir = Config.DOWNLOAD_PATH
+                files = os.listdir(download_dir)
+                matching_files = [f for f in files if os.path.splitext(f)[0] in filepath]
+                if matching_files:
+                    filepath = os.path.join(download_dir, matching_files[0])
+                else:
+                    raise FileNotFoundError("Downloaded file not found")
+            
             file_size = os.path.getsize(filepath) / (1024 * 1024)  # MB
             
             if file_size > 50:  # Telegram file size limit
@@ -285,9 +336,12 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
             query.edit_message_text("✅ Download complete!")
             
             # Cleanup
-            os.remove(filepath)
-            if file_to_send != filepath and os.path.exists(file_to_send):
-                os.remove(file_to_send)
+            try:
+                os.remove(filepath)
+                if file_to_send != filepath and os.path.exists(file_to_send):
+                    os.remove(file_to_send)
+            except:
+                pass
                 
         except BadRequest as e:
             if "file is too big" in str(e):
@@ -304,6 +358,8 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
     def compress_video(self, filepath: str) -> str:
         """Compress video using ffmpeg"""
         output_path = filepath.replace(".mp4", "_compressed.mp4")
+        if os.path.exists(output_path):
+            os.remove(output_path)
         
         import subprocess
         cmd = [
@@ -311,20 +367,28 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
             '-vcodec', 'libx264',
             '-crf', '28',
             '-preset', 'fast',
-            '-acodec', 'copy',
+            '-acodec', 'aac',
+            '-b:a', '128k',
             output_path,
-            '-y'
+            '-y',
+            '-loglevel', 'error'
         ]
         
-        subprocess.run(cmd, check=True)
-        return output_path
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+            return output_path
+        except subprocess.CalledProcessError as e:
+            logger.error(f"FFmpeg error: {e.stderr.decode()}")
+            return filepath  # Return original if compression fails
     
     def get_video_info(self, url: str) -> dict:
-        """Get video information"""
+        """Get video information with cookie support"""
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
             'extract_flat': False,
+            'cookiefile': Config.COOKIES_FILE if os.path.exists(Config.COOKIES_FILE) else None,
+            'ignoreerrors': True,
         }
         
         try:
@@ -355,7 +419,7 @@ Hello {user.first_name}! I can download videos from YouTube and other platforms.
         cookie_url_status = "✅ Set" if Config.COOKIE_URL else "❌ Not set"
         
         settings_text = f"""
-⚙️ *Download Settings*
+⚙️ Download Settings
 
 📏 Max File Size: {Config.MAX_VIDEO_SIZE}MB
 🎬 Default Resolution: {Config.DEFAULT_RESOLUTION}p
@@ -371,7 +435,7 @@ Use /resolution to change default quality
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        query.edit_message_text(settings_text, parse_mode='Markdown', reply_markup=reply_markup)
+        query.edit_message_text(settings_text, reply_markup=reply_markup)
     
     def resolution_command(self, update: Update, context: CallbackContext):
         """Set download resolution"""
@@ -405,8 +469,8 @@ Use /resolution to change default quality
             return
         
         document = update.message.document
-        if document.file_name != "cookies.txt":
-            update.message.reply_text("❌ Please upload a file named 'cookies.txt'")
+        if not document.file_name.endswith('.txt'):
+            update.message.reply_text("❌ Please upload a text file (.txt)")
             return
         
         try:
@@ -416,7 +480,7 @@ Use /resolution to change default quality
             
             update.message.reply_text(
                 f"✅ Cookies uploaded successfully!\n"
-                f"Note: This only updates local cookies. To persist, update COOKIE_URL environment variable."
+                f"File saved as: {Config.COOKIES_FILE}"
             )
                 
         except Exception as e:
@@ -456,7 +520,7 @@ Use /resolution to change default quality
         cookie_url_status = "✅ Set" if Config.COOKIE_URL else "❌ Not set"
         
         status_text = f"""
-📊 *Bot Status*
+📊 Bot Status
 
 👥 Active Downloads: {downloads_count}
 🍪 Local Cookies: {cookies_status}
@@ -464,12 +528,11 @@ Use /resolution to change default quality
 💾 Storage: {self.get_free_space()} free
         """
         
-        update.message.reply_text(status_text, parse_mode='Markdown')
+        update.message.reply_text(status_text)
     
     def get_free_space(self):
         """Get free disk space"""
         try:
-            import shutil
             total, used, free = shutil.disk_usage(Config.DOWNLOAD_PATH)
             free_gb = free / (1024**3)
             return f"{free_gb:.1f}GB"
@@ -478,11 +541,17 @@ Use /resolution to change default quality
     
     def error_handler(self, update: Update, context: CallbackContext):
         """Handle errors"""
-        logger.error(f"Update {update} caused error {context.error}")
-        if update and update.effective_message:
-            update.effective_message.reply_text(
-                "❌ An error occurred. Please try again later."
-            )
+        try:
+            error_msg = str(context.error) if context.error else "Unknown error"
+            logger.error(f"Bot error: {error_msg}")
+            
+            if update and update.effective_message:
+                # Send simple text without Markdown
+                update.effective_message.reply_text(
+                    "❌ An error occurred. Please try again later."
+                )
+        except Exception as e:
+            logger.error(f"Error in error handler: {e}")
 
 def main():
     """Start the bot"""
@@ -500,11 +569,11 @@ def main():
     # Add handlers
     dp.add_handler(CommandHandler("start", bot.start))
     dp.add_handler(CommandHandler("download", bot.download_command))
-    dp.add_handler(CommandHandler("settings", lambda u, c: bot.show_settings(u.callback_query)))
     dp.add_handler(CommandHandler("resolution", bot.resolution_command))
-    dp.add_handler(CommandHandler("cookies", bot.handle_document))
+    dp.add_handler(CommandHandler("cookies", bot.handle_document, filters=Filters.document))
     dp.add_handler(CommandHandler("update_cookies", bot.update_cookies))
     dp.add_handler(CommandHandler("status", bot.status_command))
+    dp.add_handler(CommandHandler("settings", lambda u, c: bot.show_settings(u.callback_query) if u.callback_query else u.message.reply_text("Use /settings in response to a message")))
     
     # Message handlers
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, bot.handle_message))
@@ -518,7 +587,11 @@ def main():
     
     # Start bot
     logger.info("Bot starting...")
-    logger.info(f"COOKIE_URL configured: {bool(Config.COOKIE_URL)}")
+    logger.info(f"BOT_TOKEN: {'Set' if Config.BOT_TOKEN else 'Not set'}")
+    logger.info(f"ADMIN_IDS: {Config.ADMIN_IDS}")
+    logger.info(f"COOKIE_URL: {Config.COOKIE_URL}")
+    logger.info(f"Cookies file exists: {os.path.exists(Config.COOKIES_FILE)}")
+    
     updater.start_polling()
     updater.idle()
 
