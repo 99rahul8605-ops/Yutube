@@ -3,13 +3,13 @@ services:
     name: youtube-downloader-bot
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: python main.py
     envVars:
       - key: BOT_TOKEN
         sync: false
       - key: ADMIN_IDS
         sync: false
-      - key: BATBIN_API_KEY
+      - key: COOKIE_URL
         sync: false
       - key: MAX_VIDEO_SIZE
         value: "2000"
