@@ -1,43 +1,37 @@
-aiofiles==24.1.0
-aiohttp==3.11.13
-async-lru==2.0.2
-beautifulsoup4==4.12.3
-certifi==2025.1.31
-charset-normalizer==3.4.1
-cloudscraper==1.2.71
-cryptography==44.0.1
-Flask==1.1.2
-google-api-python-client==2.161.0
-google-auth==2.38.0
-google-auth-httplib2==0.2.0
-google-auth-oauthlib==1.2.1
-gunicorn==23.0.0          # Upgraded – no pkg_resources dependency
-idna==3.10
-itsdangerous==2.0.1
-Jinja2==3.0.3
-m3u8==6.0.0
-motor==3.7.0
-mutagen==1.47.0
-pyaes==1.6.1
-pycryptodome==3.21.0
-PyJWT==2.10.1
-pyOpenSSL==25.0.0
-PyPDF2==3.0.1
-Pyrofork==2.3.46          # Added specific version (latest as of Feb 2026)
-PySocks==1.7.1
-python-dotenv==1.0.1
-python-telegram-bot==20.8
-pytube==15.0.0
-pytz==2025.2
-reportlab==4.3.1
-requests==2.32.3
-setuptools==75.8.0       # Added – provides pkg_resources for older tools
-soupsieve==2.6
-speedtest-cli==2.1.3
-sqlalchemy==2.0.38
-TgCrypto==1.2.5
-umongo==3.1.0
-urllib3==2.3.0
-websockets==14.2
-wget==3.2
-yt-dlp==2026.02.12       # Updated to latest stable
+# Use a Python 3.12.3 Alpine base image
+FROM python:3.12-alpine3.20
+
+# Set the working directory
+WORKDIR /app
+
+# Copy all files from the current directory to the container's /app directory
+COPY . .
+
+# Install necessary dependencies
+RUN apk add --no-cache \
+    gcc \
+    libffi-dev \
+    musl-dev \
+    ffmpeg \
+    aria2 \
+    make \
+    g++ \
+    cmake && \
+    wget -q https://github.com/axiomatic-systems/Bento4/archive/v1.6.0-639.zip && \
+    unzip v1.6.0-639.zip && \
+    cd Bento4-1.6.0-639 && \
+    mkdir build && \
+    cd build && \
+    cmake .. && \
+    make -j$(nproc) && \
+    cp mp4decrypt /usr/local/bin/ &&\
+    cd ../.. && \
+    rm -rf Bento4-1.6.0-639 v1.6.0-639.zip
+
+# Install Python dependencies
+RUN pip3 install --no-cache-dir --upgrade pip \
+    && pip3 install --no-cache-dir --upgrade -r sainibots.txt \
+    && python3 -m pip install -U yt-dlp
+
+# Set the command to run the application
+CMD ["sh", "-c", "gunicorn app:app & python3 main.py"]
