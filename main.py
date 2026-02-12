@@ -488,7 +488,7 @@ async def getcookies_handler(client: Client, m: Message):
 async def restart_handler(_, m):
     if m.chat.id != OWNER:
         return
-    else:
+    else: 
         await m.reply_text("𝐁𝐨𝐭 𝐢𝐬 𝐑𝐞𝐬𝐞𝐭𝐢𝐧𝐠...", True)
         os.execl(sys.executable, sys.executable, *sys.argv)
 
@@ -1584,7 +1584,7 @@ async def universal_drm_handler(bot: Client, m: Message):
 
             #elif "d1d34p8vz63oiq" in url or "sec1.pw.live" in url:
             elif "childId" in url and "parentId" in url:
-                url = f"https://anonymouspwplayer-0e5a3f512dec.herokuapp.com/pw?url={url}&token={pwtoken}"
+                url = f"https://anonymouspwplayerrr-3dba7e3fb6a8.herokuapp.com/pw?url={url}&token={pw_token}}"
                            
             
             elif 'encrypted.m' in url:
